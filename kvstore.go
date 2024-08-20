@@ -18,29 +18,33 @@ import (
 	"bytes"
 	"encoding/gob"
 	"encoding/json"
+	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/snap"
 	"go.etcd.io/raft/v3/raftpb"
 )
 
 // a key-value store backed by raft
 type rvstore struct {
-	proposeLock sync.Mutex
 	node        int
 	proposeC    chan<- string // channel for proposing updates
 	mu          sync.RWMutex
 	currentRv   *rv
 	rvs         chan *rv
 	snapshotter *snap.Snapshotter
+	walMu       sync.RWMutex
+	wal         map[string]json.RawMessage
 }
 
 type resource struct {
-	Key       string
-	Timestamp int64
+	Key       string `json:"key"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 type rv struct {
@@ -48,8 +52,18 @@ type rv struct {
 	ResourceVersion uint64
 }
 
+type rawData struct {
+	RV       uint64 `json:"rv"`
+	resource `json:",inline"`
+	Obj      json.RawMessage `json:"obj"`
+}
+
 func newRVStore(node int, snapshotter *snap.Snapshotter, proposeC chan<- string, commitC <-chan *commit, errorC <-chan error) *rvstore {
-	s := &rvstore{proposeC: proposeC, snapshotter: snapshotter, rvs: make(chan *rv, 1000), node: node}
+	f, err := os.OpenFile(fmt.Sprintf("raftexample-%d.jsonl", node), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Panic(err)
+	}
+	s := &rvstore{proposeC: proposeC, snapshotter: snapshotter, rvs: make(chan *rv, 1000), node: node, wal: make(map[string]json.RawMessage)}
 	snapshot, err := s.loadSnapshot()
 	if err != nil {
 		log.Panic(err)
@@ -60,9 +74,34 @@ func newRVStore(node int, snapshotter *snap.Snapshotter, proposeC chan<- string,
 			log.Panic(err)
 		}
 	}
+
+	go s.watchRVs(json.NewEncoder(f))
+
 	// read commits from raft into kvStore map until error
 	go s.readCommits(commitC, errorC)
 	return s
+}
+
+func (s *rvstore) watchRVs(encoder *json.Encoder) {
+	for {
+		rv := <-s.rvs
+		s.walMu.RLock()
+		obj, ok := s.wal[rv.Key]
+		if !ok {
+			// obj doesn't belong to node or has been committed
+			s.walMu.RUnlock()
+			continue
+		}
+		s.walMu.RUnlock()
+		err := encoder.Encode(&rawData{RV: rv.ResourceVersion, resource: rv.resource, Obj: obj})
+		if err != nil {
+			log.Printf("Failed to write to file (%v)\n", err)
+		}
+
+		s.walMu.Lock()
+		delete(s.wal, rv.Key)
+		s.walMu.Unlock()
+	}
 }
 
 func (s *rvstore) Current() (*rv, bool) {
@@ -74,33 +113,18 @@ func (s *rvstore) Current() (*rv, bool) {
 	return s.currentRv, true
 }
 
-func (s *rvstore) propose(r *resource) error {
-	var (
-		buf strings.Builder
-	)
-	if err := gob.NewEncoder(&buf).Encode(r); err != nil {
+func (s *rvstore) Write(obj json.RawMessage) error {
+	key := fmt.Sprintf("%d-%s", s.node, uuid.New().String())
+	next := resource{Key: key, Timestamp: time.Now().UTC().UnixNano()}
+	s.walMu.Lock()
+	s.wal[key] = obj
+	s.walMu.Unlock()
+	buf := strings.Builder{}
+	if err := gob.NewEncoder(&buf).Encode(next); err != nil {
 		return err
 	}
 	s.proposeC <- buf.String()
 	return nil
-}
-
-func (s *rvstore) Next(key string) (uint64, error) {
-	s.proposeLock.Lock()
-	defer s.proposeLock.Unlock()
-	next := resource{Key: key, Timestamp: time.Now().UTC().UnixMilli()}
-	resultCh := make(chan uint64, 1)
-	go func(key string) {
-		for rv := range s.rvs {
-			if rv.Key == key {
-				resultCh <- rv.ResourceVersion
-				return
-			}
-		}
-	}(key)
-	s.propose(&next)
-
-	return <-resultCh, nil
 }
 
 func (s *rvstore) readCommits(commitC <-chan *commit, errorC <-chan error) {

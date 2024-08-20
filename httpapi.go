@@ -35,14 +35,21 @@ func (h *httpKVAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	switch r.Method {
 	case http.MethodPatch:
-		v, err := h.store.Next(key)
+		obj, err := io.ReadAll(r.Body)
 		if err != nil {
-			http.Error(w, "Failed to Update", http.StatusInternalServerError)
+			log.Printf("Failed to read on PATCH (%v)\n", err)
+			http.Error(w, "Failed on PATCH", http.StatusBadRequest)
+			return
+		}
+		err = h.store.Write(obj)
+		if err != nil {
+			log.Printf("Failed to write on PATCH (%v)\n", err)
+			http.Error(w, "Failed on PATCH", http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(strconv.FormatUint(v, 10) + "\n"))
+		w.WriteHeader(http.StatusNoContent)
+		_, _ = w.Write([]byte{})
 	case http.MethodGet:
 		if v, ok := h.store.Current(); ok {
 			if _, err := w.Write([]byte(strconv.FormatUint(v.ResourceVersion, 10) + "\n")); err != nil {

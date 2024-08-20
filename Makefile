@@ -6,6 +6,7 @@ raftrv: $(GO_FILES) clean
 .PHONY: clean
 clean:
 	rm -rf raftexample-*
+	rm -f raftrv
 
 .PHONY: run
 run: clean raftrv

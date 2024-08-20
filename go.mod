@@ -11,6 +11,7 @@ replace go.etcd.io/etcd/api/v3 => go.etcd.io/etcd/api/v3 v3.0.0-20240510030858-5
 replace go.etcd.io/etcd/pkg/v3 => go.etcd.io/etcd/pkg/v3 v3.0.0-20240510030858-58a71a22f3a5
 
 require (
+	github.com/google/uuid v1.6.0
 	go.etcd.io/etcd/client/pkg/v3 v3.6.0-alpha.0
 	go.etcd.io/etcd/server/v3 v3.0.0-20240510030858-58a71a22f3a5
 	go.etcd.io/raft/v3 v3.6.0-alpha.0

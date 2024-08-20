@@ -8,7 +8,7 @@ export const options = {
     contacts: {
       executor: 'shared-iterations',
       vus: 10,
-      iterations: 10000,
+      iterations: 50000,
       maxDuration: '30s',
     },
   },
@@ -28,8 +28,7 @@ export default function () {
       node = 3;
       break;
   }
-  const res = http.patch(`http://127.0.0.1:${node}2380/${iteration}`, null, {
+  http.patch(`http://127.0.0.1:${node}2380/`, JSON.stringify({node, iteration}), {
     responseType: 'text',
   });
-  console.log(`Node: ${node}\tIteration: ${iteration}\tRV: ${res.body}`)
 }
